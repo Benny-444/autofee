@@ -18,8 +18,7 @@ DAYS_BACK = 14
 AVG_FEE_FILE = os.path.expanduser('~/autofee/avg_fees.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
-CHAN_IDS = ['f18d1930764e5577fd95e1283af3859bb24e95a87b07320ae44a81582625f375', '3f476ef790e861f88bbfb75173695cb1106f0078fe7d13836c18db61470f4a6a', 'a9410e4c85f845ad6ab81d689e175d180fd1e7860e8a3caef30eaeb4367968b0']  # Empty to process all channels
-# CHAN_IDS = [] # All channels
+CHAN_IDS = []  # Empty to process all channels
 
 @contextmanager
 def get_db():
