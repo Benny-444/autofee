@@ -138,8 +138,8 @@ Edit `CHAN_IDS` in `autofee_wrapper.py` (around line 20) to process specific cha
 ```python
 # Process specific channels (use full channel IDs from lncli listchannels)
 CHAN_IDS = [
-    'f18d1930764e5577fd95e1283af3859bb24e95a87b07320ae44a81582625f375',
-    '3f476ef790e861f88bbfb75173695cb1106f0078fe7d13836c18db61470f4a6a'
+    'f18d1930764e5577fd95e1283af3859bb24e95a87b07320ae44a815826123456',
+    '3f476ef790e861f88bbfb75173695cb1106f0078fe7d13836c18db614587514a'
 ]
 
 # Process all channels
@@ -197,8 +197,8 @@ tail -f ~/autofee/cron.log
 
 **Example log output:**
 ```
-2025-07-20 05:47:54,848 INFO: Channel 3f476ef790e861f88bbfb75173695cb1106f0078fe7d13836c18db61470f4a6a: avg_fee=620, ratio=0.70, current=620, target=366, new=595
-2025-07-20 05:47:54,899 INFO: Channel f18d1930764e5577fd95e1283af3859bb24e95a87b07320ae44a81582625f375: avg_fee=121, ratio=0.70, current=30, target=73, new=34
+2025-07-20 05:47:54,848 INFO: Channel 3f476ef790e861f88bbfb75173695cb1106f0078fe7d13836c18db614712345a: avg_fee=620, ratio=0.70, current=620, target=366, new=595
+2025-07-20 05:47:54,899 INFO: Channel f18d1930764e5577fd95e1283af3859bb24e95a87b07320ae44a815812345675: avg_fee=121, ratio=0.70, current=30, target=73, new=34
 ```
 
 **Reading the values:**
@@ -315,11 +315,8 @@ fee_ppm = 150
 ## Limitations and Considerations
 
 ### Current Limitations
-- **Stagnant Channel Handling**: Simplified implementation maintains last avg_fee indefinitely (spec includes 10% daily reduction after 3 days)
 - **Single Direction**: Only manages outbound fees (inbound fee automation planned for future versions)
-- **Static Configuration**: Working range and increment percentages require manual adjustment
 
 ### Operational Considerations
 - **Gossip Impact**: 30-minute update intervals balance responsiveness with network courtesy
 - **Market Response**: Gradual fee adjustments (10% increments) prevent rapid market changes
-- **Channel Selection**: Start with low-risk channels before expanding to high-volume routes
