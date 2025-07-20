@@ -146,9 +146,9 @@ CHAN_IDS = [
 CHAN_IDS = []
 ```
 
-**Finding Channel IDs:**
+**Finding Channel IDs Using Alias:**
 ```bash
-lncli listchannels | jq '.channels[].chan_id'
+lncli listchannels | jq '.channels[] | select(.peer_alias == "<alias>") | {chan_id, channel_point, peer_alias, scid}'
 ```
 
 ### Testing Strategy
