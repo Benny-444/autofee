@@ -15,10 +15,14 @@ logging.basicConfig(filename=os.path.expanduser('~/autofee/autofee_wrapper.log')
 ALPHA = 0.15
 MIN_AVG_FEE = 10
 DAYS_BACK = 14
+ADJUSTMENT_FACTOR = 0.05         # Percentage of difference to apply as adjustment (0.1 = 10%)
+LOW_FEE_THRESHOLD = 10           # Below this value, use fixed decrement instead of percentage
+LOW_FEE_DECREMENT = 1            # Fixed amount to subtract for low fees
 AVG_FEE_FILE = os.path.expanduser('~/autofee/avg_fees.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
-CHAN_IDS = []  # Empty to process all channels
+CHAN_IDS = [] # All channels
+EXCLUDE_CHAN_IDS = []  # Add your channel IDs here
 
 @contextmanager
 def get_db():
@@ -265,12 +269,10 @@ def generate_ini():
     """Generate dynamic_charge.ini with fees for all channels"""
     try:
         init_database()
-
         local_info = run_lncli(['getinfo'])
         local_pubkey = local_info.get('identity_pubkey')
         if not local_pubkey:
             raise ValueError("Could not retrieve local pubkey")
-
         channels = run_lncli(['listchannels'])['channels']
         processed_channels = 0
         ini_content = ""
@@ -281,18 +283,20 @@ def generate_ini():
         for chan in channels:
             chan_id = chan.get('chan_id')
             short_chan_id = chan.get('scid')
-
-            if CHAN_IDS and chan_id not in CHAN_IDS:
-                logging.info(f"Skipping channel {chan_id} not in CHAN_IDS")
+            # Skip if filtering by CHAN_IDS (support both chan_id and scid)
+            if CHAN_IDS and chan_id not in CHAN_IDS and str(short_chan_id) not in CHAN_IDS:
                 continue
-
+            if chan_id in EXCLUDE_CHAN_IDS or str(short_chan_id) in EXCLUDE_CHAN_IDS:
+                logging.info(f"Skipping excluded channel {chan_id} (scid: {short_chan_id})")
+                continue
+            # Skip Inactive Channels
+            if not chan.get('active', False):
+                logging.info(f"Skipping inactive channel {chan_id}")
+                continue
             logging.info(f"Processing channel {chan_id} (scid: {short_chan_id})")
-
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
-
             fee_data[str(chan['scid'])] = current_fee if current_fee > 0 else 0
-
             # Cache policy for forwarding history processing
             channel_policies[short_chan_id] = {
                 'local_base_fee': channel_info['local_base_fee'],
@@ -312,10 +316,14 @@ def generate_ini():
         for chan in channels:
             chan_id = chan.get('chan_id')
             short_chan_id = chan.get('scid')
-
-            if CHAN_IDS and chan_id not in CHAN_IDS:
+            if CHAN_IDS and chan_id not in CHAN_IDS and str(short_chan_id) not in CHAN_IDS:
                 continue
-
+            if chan_id in EXCLUDE_CHAN_IDS or str(short_chan_id) in EXCLUDE_CHAN_IDS:
+                logging.info(f"Skipping excluded channel {chan_id} (scid: {short_chan_id})")
+                continue
+            # ADD THIS CHECK HERE TOO:
+            if not chan.get('active', False):
+                continue
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = calculate_avg_fee_from_history(chan['scid'], current_fee)
@@ -329,27 +337,29 @@ def generate_ini():
         for chan in channels:
             chan_id = chan.get('chan_id')
             short_chan_id = chan.get('scid')
-
-            if CHAN_IDS and chan_id not in CHAN_IDS:
+            if CHAN_IDS and chan_id not in CHAN_IDS and str(short_chan_id) not in CHAN_IDS:
+                continue
+            if chan_id in EXCLUDE_CHAN_IDS or str(short_chan_id) in EXCLUDE_CHAN_IDS:
+                logging.info(f"Skipping excluded channel {chan_id} (scid: {short_chan_id})")
                 continue
 
+            # Skip Inactive Channels
+            if not chan.get('active', False):
+                continue
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = updated_avg_fees.get(str(chan['scid']), load_persisted_avg_fee(chan['scid']))
-
             capacity = float(chan.get('capacity', 1))
             if capacity > 0:
                 ratio = float(chan.get('local_balance', 0)) / capacity
             else:
                 ratio = 0.5
-
             set_fee = avg_fee * 2 * (1 - ratio)
             set_fee = max(0, round(set_fee))
-
-            if current_fee <= 5 and set_fee <= 5:
-                new_fee = max(0, current_fee - 1)
+            if current_fee <= LOW_FEE_THRESHOLD and set_fee <= LOW_FEE_THRESHOLD:
+                new_fee = max(0, current_fee - LOW_FEE_DECREMENT)
             else:
-                adjustment = 0.1 * (set_fee - current_fee)
+                adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
                 new_fee = round(current_fee + adjustment)
                 new_fee = max(0, new_fee)
 
