@@ -356,12 +356,21 @@ def generate_ini():
                 ratio = 0.5
             set_fee = avg_fee * 2 * (1 - ratio)
             set_fee = max(0, round(set_fee))
+
+            # Apply Low Fee Threshold Special Behavior
             if current_fee <= LOW_FEE_THRESHOLD and set_fee <= LOW_FEE_THRESHOLD:
-                new_fee = max(0, current_fee - LOW_FEE_DECREMENT)
+                if set_fee > current_fee:
+                    # Target is higher, allow increase even in low fee range
+                    adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
+                    adjustment = max(1, round(adjustment))  # Ensure at least 1 ppm increase
+                    new_fee = current_fee + adjustment
+                else:
+                    # Target is lower, use fixed decrement
+                    new_fee = max(0, current_fee - LOW_FEE_DECREMENT)
             else:
                 adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
                 new_fee = round(current_fee + adjustment)
-                new_fee = max(0, new_fee)
+            new_fee = max(0, new_fee)
 
             # Compute short_channel_id in x format from scid
             scid_int = int(chan['scid'])
