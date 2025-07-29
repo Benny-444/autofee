@@ -16,7 +16,6 @@ STAGNANT_RATIO_THRESHOLD = 0.30  # Channel must be above 30% liquidity
 STAGNANT_HOURS = 72              # Hours without routing to be considered stagnant
 RATIO_CHANGE_THRESHOLD = 0.001   # Minimum ratio change to consider as activity
 STAGNANT_REDUCTION_PCT = 5       # Reduce fees by 5%
-LOW_FEE_THRESHOLD = 10           # Below this, reduce by 1 ppm instead of %
 STAGNANT_STATE_FILE = os.path.expanduser('~/autofee/stagnant_state.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 CHAN_IDS = []  # Empty to process all channels
@@ -65,12 +64,13 @@ def apply_stagnant_reduction(current_fee):
 
     abs_fee = abs(current_fee)
 
-    # For low fees, reduce by 1 ppm
-    if abs_fee < LOW_FEE_THRESHOLD:
-        new_abs_fee = max(0, abs_fee - 1)
-    else:
-        # Apply percentage reduction
-        new_abs_fee = round(abs_fee * (1 - STAGNANT_REDUCTION_PCT / 100))
+    # Calculate percentage reduction
+    reduction = abs_fee * (STAGNANT_REDUCTION_PCT / 100)
+
+    # Ensure minimum 1 ppm reduction
+    reduction = max(1, round(reduction))
+
+    new_abs_fee = max(0, abs_fee - reduction)
 
     # Preserve sign for negative fees
     return -new_abs_fee if current_fee < 0 else new_abs_fee

@@ -16,8 +16,6 @@ ALPHA = 0.15
 MIN_AVG_FEE = 10
 DAYS_BACK = 14
 ADJUSTMENT_FACTOR = 0.05         # Percentage of difference to apply as adjustment (0.1 = 10%)
-LOW_FEE_THRESHOLD = 10           # Below this value, use fixed decrement instead of percentage
-LOW_FEE_DECREMENT = 1            # Fixed amount to subtract for low fees
 AVG_FEE_FILE = os.path.expanduser('~/autofee/avg_fees.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
@@ -357,20 +355,12 @@ def generate_ini():
             set_fee = avg_fee * 2 * (1 - ratio)
             set_fee = max(0, round(set_fee))
 
-            # Apply Low Fee Threshold Special Behavior
-            if current_fee <= LOW_FEE_THRESHOLD and set_fee <= LOW_FEE_THRESHOLD:
-                if set_fee > current_fee:
-                    # Target is higher, allow increase even in low fee range
-                    adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
-                    adjustment = max(1, round(adjustment))  # Ensure at least 1 ppm increase
-                    new_fee = current_fee + adjustment
-                else:
-                    # Target is lower, use fixed decrement
-                    new_fee = max(0, current_fee - LOW_FEE_DECREMENT)
-            else:
-                adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
-                new_fee = round(current_fee + adjustment)
-            new_fee = max(0, new_fee)
+            # Calculate adjustment with minimum ±1 ppm movement
+            adjustment = ADJUSTMENT_FACTOR * (set_fee - current_fee)
+            if adjustment != 0:
+                adjustment = max(1, abs(round(adjustment))) * (1 if adjustment > 0 else -1)
+            new_fee = current_fee + adjustment
+            new_fee = max(0, new_fee)  # Ensure non-negative
 
             # Compute short_channel_id in x format from scid
             scid_int = int(chan['scid'])
