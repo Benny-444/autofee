@@ -19,7 +19,8 @@ ADJUSTMENT_FACTOR = 0.05         # Percentage of difference to apply as adjustme
 AVG_FEE_FILE = os.path.expanduser('~/autofee/avg_fees.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
-CHAN_IDS = [] # All channels
+STAGNANT_STATE_FILE = os.path.expanduser('~/autofee/stagnant_state.json')  # Added
+CHAN_IDS = [] # Leave empty for all channels
 EXCLUDE_CHAN_IDS = []  # Add your channel IDs here
 
 @contextmanager
@@ -109,6 +110,16 @@ def save_avg_fee(fee_data):
     except Exception as e:
         logging.error(f"Error saving avg_fees: {str(e)}")
 
+def load_stagnant_state():
+    """Load stagnant state to check which channels are stagnant"""
+    try:
+        if os.path.exists(STAGNANT_STATE_FILE):
+            with open(STAGNANT_STATE_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logging.error(f"Error loading stagnant state: {str(e)}")
+    return {}
+
 def run_lncli(args):
     """Execute lncli command and parse JSON output"""
     try:
@@ -192,7 +203,6 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm):
     """Calculate EMA from fee history database or return persisted if no history"""
     try:
         cutoff_time = int((datetime.now() - timedelta(days=DAYS_BACK)).timestamp())
-
         with get_db() as conn:
             cursor = conn.execute(
                 '''SELECT timestamp, true_fee_ppm
@@ -201,15 +211,24 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm):
                    ORDER BY timestamp ASC''',
                 (scid, cutoff_time)
             )
-
             records = cursor.fetchall()
-
+            
             if not records:
                 persisted = load_persisted_avg_fee(scid)
                 if persisted > 0:
                     return persisted
-                return current_fee_ppm
-
+                # Check if channel exists in persisted data (even with 0 value)
+                try:
+                    if os.path.exists(AVG_FEE_FILE):
+                        with open(AVG_FEE_FILE, 'r') as f:
+                            data = json.load(f)
+                            if str(scid) in data:
+                                return data[str(scid)]  # Return existing value, even if 0
+                except:
+                    pass
+                return current_fee_ppm  # Only for truly NEW channels
+            
+            # Rest of the function continues here for when records exist...
             ema = load_persisted_avg_fee(scid)
             for i, record in enumerate(records):
                 true_fee_ppm = record['true_fee_ppm']
@@ -273,9 +292,13 @@ def generate_ini():
             raise ValueError("Could not retrieve local pubkey")
         channels = run_lncli(['listchannels'])['channels']
         processed_channels = 0
+        skipped_stagnant = 0
         ini_content = ""
         fee_data = {}
         channel_policies = {}  # Cache for forwarding history processing
+
+        # Load stagnant state
+        stagnant_state = load_stagnant_state()
 
         # First pass: collect current_fee_ppm and build policy cache
         for chan in channels:
@@ -344,6 +367,35 @@ def generate_ini():
             # Skip Inactive Channels
             if not chan.get('active', False):
                 continue
+            
+            # Check if channel is stagnant
+            stagnant_info = stagnant_state.get(str(short_chan_id), {})
+            is_stagnant = stagnant_info.get('is_stagnant', False)
+            
+            channel_info = get_channel_info(short_chan_id, local_pubkey)
+            current_fee = channel_info['current_fee_ppm']
+            avg_fee = updated_avg_fees.get(str(chan['scid']), load_persisted_avg_fee(chan['scid']))
+            
+            # Compute short_channel_id in x format from scid
+            scid_int = int(chan['scid'])
+            block_height = scid_int >> 40
+            tx_index = (scid_int >> 16) & 0xFFFFFF
+            output_index = scid_int & 0xFFFF
+            short_channel_id_x = f"{block_height}x{tx_index}x{output_index}"
+            
+            if is_stagnant:
+                # Skip stagnant channels - let stagnant wrapper handle them
+                logging.info(f"Channel {chan_id}: Skipping stagnant channel (will be handled by stagnant wrapper) - current_fee={current_fee}, avg_fee={avg_fee}")
+                skipped_stagnant += 1
+                
+                # Create basic entry with current fee (no adjustment)
+                ini_content += f"[autofee-{short_channel_id_x}]\n"
+                ini_content += f"chan.id = {chan['scid']}\n"
+                ini_content += "strategy = static\n"
+                ini_content += f"fee_ppm = {int(current_fee)}\n\n"
+                processed_channels += 1
+                continue
+            
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = updated_avg_fees.get(str(chan['scid']), load_persisted_avg_fee(chan['scid']))
@@ -372,7 +424,7 @@ def generate_ini():
             ini_content += f"[autofee-{short_channel_id_x}]\n"
             ini_content += f"chan.id = {chan['scid']}\n"
             ini_content += "strategy = static\n"
-            ini_content += f"fee_ppm = {new_fee}\n\n"
+            ini_content += f"fee_ppm = {int(new_fee)}\n\n"
             processed_channels += 1
 
             logging.info(f"Channel {chan_id}: avg_fee={avg_fee}, ratio={ratio:.2f}, current={current_fee}, target={set_fee}, new={new_fee}")
@@ -380,8 +432,8 @@ def generate_ini():
         with open(CHARGE_INI_FILE, 'w') as f:
             f.write(ini_content)
 
-        logging.info(f"Generated INI for {processed_channels} channels")
-        print(f"Generated INI for {processed_channels} channels")
+        logging.info(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant channels)")
+        print(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant channels)")
 
     except Exception as e:
         logging.error(f"Error generating ini: {str(e)}")

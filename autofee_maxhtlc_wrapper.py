@@ -9,13 +9,13 @@ import configparser
 # Ensure directory exists
 os.makedirs(os.path.expanduser('~/autofee'), exist_ok=True)
 
-logging.basicConfig(filename=os.path.expanduser('~/autofee/autofee_maxhtlc_wrapper.log'), 
-                    level=logging.INFO, 
+logging.basicConfig(filename=os.path.expanduser('~/autofee/autofee_maxhtlc_wrapper.log'),
+                    level=logging.INFO,
                     format='%(asctime)s %(levelname)s: %(message)s')
 
 # Configuration constants
-MAX_HTLC_RATIO = 0.98  # 98% of available liquidity (after reserve)
-CAPACITY_RESERVE_RATIO = 0.02  # 2% of total capacity to preserve
+MAX_HTLC_RATIO = 0.98  # 98% of usable balance
+RESERVE_OFFSET = 0.01  # 1% of capacity reserved and unusable
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 CHAN_IDS = []  # Empty to process all channels
 EXCLUDE_CHAN_IDS = []  # Add your channel IDs here
@@ -71,7 +71,7 @@ def get_current_max_htlc(short_chan_id, local_pubkey):
         return None
 
 def update_max_htlc():
-    """Update max HTLC for all channels with capacity reserve logic"""
+    """Update max HTLC for all channels to 98% of usable balance (after reserve)"""
     try:
         # Check if the INI file exists
         if not os.path.exists(CHARGE_INI_FILE):
@@ -100,7 +100,6 @@ def update_max_htlc():
         max_decrease_pct = 0
         max_increase_chan = None
         max_decrease_chan = None
-        channels_at_minimum = 0
 
         for chan in channels:
             chan_id = chan.get('chan_id')
@@ -120,23 +119,19 @@ def update_max_htlc():
 
             total_channels += 1
 
-            # Get channel capacity and local balance
+            # Calculate usable balance after accounting for channel reserve
             capacity = int(chan.get('capacity', 0))
             local_balance = int(chan.get('local_balance', 0))
-            
-            # Calculate capacity reserve
-            capacity_reserve = capacity * CAPACITY_RESERVE_RATIO
-            
-            # Calculate new max_htlc_msat based on available liquidity after reserve
-            if local_balance <= capacity_reserve:
-                # Channel has 2% or less outbound liquidity - set to 1 sat
-                new_max_htlc_msat = 1000  # 1 sat in msats
-                channels_at_minimum += 1
-                logging.info(f"Channel {chan_id}: local_balance={local_balance:,} <= reserve={capacity_reserve:,.0f}, setting max_htlc to 1 sat")
+
+            # Special case: 0 balance channels get 1 sat max HTLC
+            if local_balance == 0:
+                new_max_htlc_msat = 1000  # 1 sat in millisats
+                reserve_amount = 0
+                usable_balance = 0
             else:
-                # Calculate based on available liquidity after reserve
-                available_liquidity = local_balance - capacity_reserve
-                new_max_htlc_msat = int(available_liquidity * MAX_HTLC_RATIO * 1000)  # Convert sats to msats
+                reserve_amount = int(capacity * RESERVE_OFFSET)
+                usable_balance = max(0, local_balance - reserve_amount)
+                new_max_htlc_msat = int(usable_balance * MAX_HTLC_RATIO * 1000)  # Convert sats to msats
 
             # Get current max_htlc_msat
             current_max_htlc_msat = get_current_max_htlc(short_chan_id, local_pubkey)
@@ -148,13 +143,13 @@ def update_max_htlc():
             # Update the INI section
             if config.has_section(section_name):
                 # Always set max_htlc_msat
-                config.set(section_name, 'max_htlc_msat', str(new_max_htlc_msat))
+                config.set(section_name, 'max_htlc_msat', str(int(new_max_htlc_msat)))
                 channels_updated += 1
 
                 # Calculate percentage change for logging
                 if current_max_htlc_msat and current_max_htlc_msat > 0:
                     change_pct = ((new_max_htlc_msat - current_max_htlc_msat) / current_max_htlc_msat) * 100
-                    
+
                     # Track maximum changes
                     if change_pct > max_increase_pct:
                         max_increase_pct = change_pct
@@ -167,34 +162,25 @@ def update_max_htlc():
                     current_sats = current_max_htlc_msat // 1000
                     new_sats = new_max_htlc_msat // 1000
                     local_balance_str = f"{local_balance:,}"
+                    reserve_sats = reserve_amount
+                    usable_sats = usable_balance
                     current_sats_str = f"{current_sats:,}"
                     new_sats_str = f"{new_sats:,}"
-                    reserve_str = f"{int(capacity_reserve):,}"
 
-                    if new_max_htlc_msat == 1000:
-                        logging.info(f"Channel {chan_id}: capacity={capacity:,} sats, local_balance={local_balance_str} sats, "
-                                   f"reserve={reserve_str} sats, max_htlc: {current_sats_str} -> 1 sat (minimum)")
-                    else:
-                        available_str = f"{int(local_balance - capacity_reserve):,}"
-                        logging.info(f"Channel {chan_id}: capacity={capacity:,} sats, local_balance={local_balance_str} sats, "
-                                   f"reserve={reserve_str} sats, available={available_str} sats, "
-                                   f"max_htlc: {current_sats_str} -> {new_sats_str} sats "
-                                   f"({change_pct:+.1f}%)")
+                    logging.info(f"Channel {chan_id}: capacity={capacity:,}, local_balance={local_balance_str} sats, "
+                               f"{'0-balance channel, set to 1 sat' if local_balance == 0 else f'reserve={reserve_sats:,}, usable={usable_sats:,}'}, "
+                               f"max_htlc: {current_sats_str} -> {new_sats_str} sats "
+                               f"({change_pct:+.1f}%)")
                 else:
                     # No previous value or zero value
                     new_sats = new_max_htlc_msat // 1000
                     local_balance_str = f"{local_balance:,}"
+                    reserve_sats = reserve_amount
+                    usable_sats = usable_balance
                     new_sats_str = f"{new_sats:,}"
-                    reserve_str = f"{int(capacity_reserve):,}"
-                    
-                    if new_max_htlc_msat == 1000:
-                        logging.info(f"Channel {chan_id}: capacity={capacity:,} sats, local_balance={local_balance_str} sats, "
-                                   f"reserve={reserve_str} sats, max_htlc set to 1 sat (minimum)")
-                    else:
-                        available_str = f"{int(local_balance - capacity_reserve):,}"
-                        logging.info(f"Channel {chan_id}: capacity={capacity:,} sats, local_balance={local_balance_str} sats, "
-                                   f"reserve={reserve_str} sats, available={available_str} sats, "
-                                   f"max_htlc set to {new_sats_str} sats (no previous value)")
+                    logging.info(f"Channel {chan_id}: capacity={capacity:,}, local_balance={local_balance_str} sats, "
+                               f"{'0-balance channel, set to 1 sat' if local_balance == 0 else f'reserve={reserve_sats:,}, usable={usable_sats:,}'}, "
+                               f"max_htlc set to {new_sats_str} sats (no previous value)")
             else:
                 # Channel has no section (shouldn't happen if autofee_wrapper.py ran)
                 logging.warning(f"Channel {chan_id} has no section in INI, skipping")
@@ -207,18 +193,18 @@ def update_max_htlc():
 
         # Log summary
         logging.info(f"=== Max HTLC Update Summary ===")
+        logging.info(f"Reserve offset: {RESERVE_OFFSET*100}% of capacity")
         logging.info(f"Total channels processed: {total_channels}")
         logging.info(f"Channels updated: {channels_updated}")
-        logging.info(f"Channels at minimum (1 sat): {channels_at_minimum}")
-        
+
         if max_increase_chan:
             logging.info(f"Largest increase: Channel {max_increase_chan} (+{max_increase_pct:.1f}%)")
         if max_decrease_chan:
             logging.info(f"Largest decrease: Channel {max_decrease_chan} ({max_decrease_pct:.1f}%)")
-        
+
         logging.info(f"=== End Summary ===")
 
-        print(f"Updated max HTLC for {channels_updated} channels ({channels_at_minimum} at minimum)")
+        print(f"Updated max HTLC for {channels_updated} channels (with {RESERVE_OFFSET*100}% reserve offset)")
 
     except Exception as e:
         logging.error(f"Error updating max HTLC: {str(e)}")

@@ -14,13 +14,13 @@ os.makedirs(os.path.expanduser('~/autofee'), exist_ok=True)
 logging.basicConfig(filename=os.path.expanduser('~/autofee/autofee_stagnant_wrapper.log'), level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 
 # Configuration constants
-STAGNANT_RATIO_THRESHOLD = 0.20  # Channel must be above N% liquidity (0.1 = 10%)
-STAGNANT_HOURS = 24              # Hours without routing to be considered stagnant
-STAGNANT_REDUCTION_PCT = 0.5     # Reduce fees by N%
+STAGNANT_RATIO_THRESHOLD = 0.2   # Channel must be above N% liquidity (0.1 = 10%)
+STAGNANT_HOURS = 1               # Hours without routing to be considered stagnant
+STAGNANT_REDUCTION_PCT = 0.5     # Reduce fees by N% (1.0 = 1%)
 STAGNANT_STATE_FILE = os.path.expanduser('~/autofee/stagnant_state.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
-CHAN_IDS = []  # Empty to process all channels
+CHAN_IDS = []  # Empty to process all channels. Make sure these channels are excluded in main neginb wrapper.
 EXCLUDE_CHAN_IDS = []  # Add your channel IDs here
 
 def load_stagnant_state():
@@ -267,9 +267,15 @@ def identify_and_reduce_stagnant():
 
             channels_processed += 1
 
-        # Save updated state
-        save_stagnant_state(updated_state)
+        # Load existing state first to preserve other channels
+        existing_state = load_stagnant_state()
 
+        # Merge: keep existing entries, update only our processed channels
+        final_state = dict(existing_state)  # Start with existing state
+        final_state.update(updated_state)   # Update only channels we processed
+
+        # Save merged state
+        save_stagnant_state(final_state)
         # Write updated INI file with atomic write
         temp_file = CHARGE_INI_FILE + '.tmp'
         with open(temp_file, 'w') as f:
