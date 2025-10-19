@@ -8,6 +8,7 @@ channel's average fee (from avg_fees.json) as the minimum.
 
 Configuration:
 - Each channel can have either a static minimum fee or use its avg_fee
+- When using avg_fee, you can optionally specify a percentage (e.g., 0.8 for 80%)
 - The script only raises fees if they're below the minimum (never lowers)
 - Preserves all other settings (inbound fees, max_htlc, etc.)
 """
@@ -39,18 +40,26 @@ CHANNEL_MINIMUMS = [
     #     'enabled': True
     # },
     
-    # Example 2: Use average fee as minimum
+    # Example 2: Use full average fee as minimum (100%)
     # {
     #     'chan_id': '996507179527241730',  # SCID format
     #     'min_type': 'avg_fee',  # Use the channel's avg_fee as minimum
     #     'enabled': True
     # },
     
-    # Example 3: Another static minimum
+    # Example 3: Use 80% of average fee as minimum
     # {
-    #     'chan_id': '996507179527241731',
-    #     'min_type': 'static',
-    #     'min_value': 50,  # Lower minimum for this channel
+    #     'chan_id': '996507179527241731',  # SCID format
+    #     'min_type': 'avg_fee',  # Use percentage of avg_fee
+    #     'avg_fee_percentage': 0.8,  # 80% of avg_fee (optional, defaults to 1.0)
+    #     'enabled': True
+    # },
+    
+    # Example 4: Use 120% of average fee as minimum
+    # {
+    #     'chan_id': '996507179527241732',
+    #     'min_type': 'avg_fee',
+    #     'avg_fee_percentage': 1.2,  # 120% of avg_fee
     #     'enabled': True
     # },
 ]
@@ -108,12 +117,28 @@ def get_channel_minimum(channel_config: dict, avg_fees: Dict[str, float]) -> Opt
         return int(min_value)
     
     elif min_type == 'avg_fee':
-        # Use the channel's average fee
+        # Use the channel's average fee (with optional percentage)
         avg_fee = avg_fees.get(str(chan_id))
         if avg_fee is None:
             logging.warning(f"Channel {chan_id} has avg_fee min_type but no avg_fee found")
             return None
-        return int(round(avg_fee))
+        
+        # Get percentage (default to 100% if not specified)
+        percentage = channel_config.get('avg_fee_percentage', 1.0)
+        
+        # Validate percentage
+        if percentage <= 0:
+            logging.warning(f"Channel {chan_id} has invalid avg_fee_percentage {percentage}, using 100%")
+            percentage = 1.0
+        
+        # Calculate minimum based on percentage
+        calculated_min = avg_fee * percentage
+        result = int(round(calculated_min))
+        
+        # Log the calculation
+        logging.info(f"Channel {chan_id}: Calculated minimum from avg_fee {avg_fee:.0f} ppm * {percentage*100:.0f}% = {result} ppm")
+        
+        return result
     
     else:
         logging.warning(f"Channel {chan_id} has unknown min_type: {min_type}")
@@ -200,8 +225,15 @@ def enforce_minimum_fees():
                 config.set(section_name, 'fee_ppm', str(min_fee))
                 channels_raised += 1
                 
+                # Build detailed log message based on min_type
                 min_type = channel_config.get('min_type')
-                min_source = f"avg_fee ({avg_fees.get(str(chan_id), 0):.0f})" if min_type == 'avg_fee' else f"static ({min_fee})"
+                if min_type == 'avg_fee':
+                    avg_fee_value = avg_fees.get(str(chan_id), 0)
+                    percentage = channel_config.get('avg_fee_percentage', 1.0)
+                    min_source = f"avg_fee ({avg_fee_value:.0f} ppm * {percentage*100:.0f}% = {min_fee})"
+                else:
+                    min_source = f"static ({min_fee})"
+                
                 logging.info(f"Channel {chan_id}: Raised fee from {current_fee} to {min_fee} ppm (minimum: {min_source})")
             else:
                 channels_already_ok += 1

@@ -266,6 +266,52 @@ CHAN_IDS = ['12345678901234567890']  # REQUIRED: Specify channels
 - Pivot = 0.6 (60%): Protects against low liquidity more aggressively
 - Pivot = 0.4 (40%): Encourages outflow even at moderate liquidity
 
+**Multiple Channels with Different Pivots:**
+
+Since each channel may benefit from a different pivot strategy, you can create multiple copies of the script:
+
+```bash
+# In ~/autofee/
+cp autofee_pivot_wrapper.py autofee_pivot_channel1.py
+cp autofee_pivot_wrapper.py autofee_pivot_channel2.py
+cp autofee_pivot_wrapper.py autofee_pivot_channel3.py
+
+# Make executable
+chmod +x autofee_pivot_*.py
+```
+
+Then configure each copy individually:
+
+```python
+# autofee_pivot_channel1.py - Conservative peer
+AVG_FEE_PIVOT = 0.6              # Protect against depleting
+CHAN_IDS = ['111111111111111111']
+
+# autofee_pivot_channel2.py - Encourage outflow
+AVG_FEE_PIVOT = 0.4              # Push liquidity out
+CHAN_IDS = ['222222222222222222']
+
+# autofee_pivot_channel3.py - Aggressive protection
+AVG_FEE_PIVOT = 0.7              # Strongly discourage depletion
+CHAN_IDS = ['333333333333333333']
+```
+
+Add each to `run_autofee.sh` in the optional scripts section (Step 6), before charge-lnd runs:
+
+```bash
+# Optional Scripts - Custom pivots for specific channels
+~/autofee/autofee_pivot_channel1.py
+sleep 1
+~/autofee/autofee_pivot_channel2.py
+sleep 1
+~/autofee/autofee_pivot_channel3.py
+sleep 1
+
+# Then apply with charge-lnd...
+```
+
+Each script will override the fees for its specified channels, applying its unique pivot strategy.
+
 #### Channel Groups (`autofee_group_wrapper.py`)
 
 Synchronize fees across multiple channels:
@@ -291,18 +337,59 @@ CHANNEL_GROUPS = [
 
 #### Minimum Fee Enforcement (`autofee_minfee_wrapper.py`)
 
-Ensure channels don't go below minimums:
+Ensure channels don't go below minimums - useful for preventing race-to-the-bottom fee competition:
 
 ```python
 CHANNEL_MINIMUMS = [
+    # Example 1: Static minimum fee
     {
         'chan_id': '12345678901234567890',
-        'min_type': 'static',     # or 'avg_fee'
-        'min_value': 100,         # Only for 'static'
+        'min_type': 'static',     # Use a fixed minimum
+        'min_value': 100,         # Minimum 100 ppm
         'enabled': True
-    }
+    },
+    
+    # Example 2: Use full average fee as minimum (100%)
+    {
+        'chan_id': '09876543210987654321',
+        'min_type': 'avg_fee',    # Use the channel's avg_fee
+        'enabled': True
+    },
+    
+    # Example 3: Use 80% of average fee as minimum
+    {
+        'chan_id': '11111111111111111111',
+        'min_type': 'avg_fee',
+        'avg_fee_percentage': 0.8,  # 80% of avg_fee
+        'enabled': True
+    },
+    
+    # Example 4: Use 120% of average fee as minimum
+    {
+        'chan_id': '22222222222222222222',
+        'min_type': 'avg_fee',
+        'avg_fee_percentage': 1.2,  # 120% of avg_fee
+        'enabled': True
+    },
 ]
 ```
+
+**How it works:**
+
+- **Static minimums**: Simple floor value - fees never go below this number
+- **avg_fee minimums**: Uses the channel's current EMA from `avg_fees.json`
+  - Default (no percentage specified): Uses 100% of avg_fee
+  - With percentage: Calculates `avg_fee × percentage`
+  - Example: If avg_fee = 150 ppm and percentage = 0.8, minimum = 120 ppm
+
+**Use cases:**
+
+- **Static**: Good for new channels without routing history
+- **100% avg_fee**: Prevents fees from dropping below historical average
+- **<100% (e.g., 0.8)**: Allows some flexibility while maintaining a floor
+- **>100% (e.g., 1.2)**: More aggressive minimum, keeps fees elevated
+
+**Note:** This script only *raises* fees to meet minimums - it never lowers them.
 
 ## Usage
 
