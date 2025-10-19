@@ -339,13 +339,122 @@ The `run_autofee.sh` script orchestrates all components in the correct order:
 ~/autofee/run_autofee.sh
 ```
 
-**Execution sequence:**
-1. Trim logs (keep system lean)
-2. Calculate outbound fees
-3. Apply negative inbound fees
-4. Reduce stagnant channel fees
-5. Optimize max HTLC values
-6. Apply all changes with charge-lnd
+#### Critical Execution Order
+
+The scripts **must** run in this specific order for the system to work correctly:
+
+**1. Log Trimmer** (optional, not critical)
+```bash
+autofee_log_trimmer.py
+```
+- Keeps logs under control (50k lines per file)
+- Safe to skip if it fails
+
+**2. Outbound Fee Wrapper** (REQUIRED - must be first)
+```bash
+autofee_wrapper.py
+```
+- **Why first:** Generates the base `dynamic_charge.ini` file
+- Updates `fee_history.db` with new forwarding events
+- Calculates EMA and updates `avg_fees.json`
+- Creates INI sections for all channels with outbound fees
+- **Critical:** All other scripts modify this INI - it must exist first
+- **If this fails:** Stop - other scripts have nothing to work with
+
+**3. Inbound Fee Wrapper** (modifies INI)
+```bash
+autofee_neginb_wrapper.py
+```
+- **Why after wrapper:** Reads `avg_fees.json` created by wrapper
+- **What it does:** Opens existing INI, adds `inbound_fee_ppm` to sections
+- Uses configparser to read → modify → write INI
+- **If this fails:** Continue - outbound fees still work
+
+**4. Stagnant Detection** (modifies INI)
+```bash
+autofee_stagnant_wrapper.py
+```
+- **Why after wrapper:** Checks `fee_history.db` for recent forwards
+- **Why after inbound:** Can reduce both outbound AND inbound fees
+- **What it does:** Opens INI, reduces fees for stagnant channels
+- Overrides fees set by wrapper/neginb for stagnant channels
+- **If this fails:** Continue - regular fees still applied
+
+**5. Max HTLC Optimizer** (modifies INI)
+```bash
+autofee_maxhtlc_wrapper.py
+```
+- **Why after wrapper:** Needs INI sections to exist
+- **What it does:** Opens INI, adds `max_htlc_msat` to each section
+- Independent of other fee calculations (separate field)
+- **If this fails:** Continue - fees work without max HTLC
+
+**6. Optional Scripts** (final overrides - if configured)
+
+These are commented out by default but can be enabled:
+
+```bash
+# autofee_pivot_wrapper.py    # Custom pivot points for specific channels
+# autofee_group_wrapper.py    # Synchronize fees across channel groups
+# autofee_minfee_wrapper.py   # Enforce minimum fee floors
+```
+
+- **Why last:** These are final overrides for specific channels
+- Must come after all standard fee calculations
+- Only run if configured (have specific channels in CHAN_IDS)
+
+**7. Apply Changes with charge-lnd** (MUST BE LAST)
+```bash
+cd ~/autofee/charge-lnd
+source venv/bin/activate
+charge-lnd --macaroon ~/autofee/charge-lnd.macaroon \
+  -c ~/autofee/dynamic_charge.ini -v
+deactivate
+```
+- **Why last:** Applies the fully-constructed INI to your node
+- All modifications must be complete before this runs
+- **If this fails:** Check INI syntax and charge-lnd logs
+
+#### Why This Order Matters
+
+The system uses a **pipeline architecture**:
+
+```
+1. GENERATE base INI
+   └─> autofee_wrapper.py creates dynamic_charge.ini
+
+2. MODIFY/ENHANCE INI  
+   ├─> autofee_neginb_wrapper.py adds inbound_fee_ppm
+   ├─> autofee_stagnant_wrapper.py reduces fees (overrides)
+   ├─> autofee_maxhtlc_wrapper.py adds max_htlc_msat
+   └─> optional scripts make final overrides
+
+3. APPLY INI to node
+   └─> charge-lnd applies all changes at once
+```
+
+**Key Principles:**
+
+1. **Generator must be first** - `autofee_wrapper.py` creates the INI structure
+2. **Modifiers work on existing INI** - All other scripts use configparser to read, modify, and write back
+3. **Later scripts override earlier ones** - Stagnant can override wrapper's fees
+4. **Application happens once at the end** - charge-lnd sees the final result
+
+**What happens if you run out of order:**
+
+- Run neginb before wrapper: ❌ No INI exists to modify
+- Run stagnant before wrapper: ❌ No fee_history.db to check
+- Run charge-lnd in the middle: ❌ Applies incomplete configuration
+- Skip wrapper entirely: ❌ Nothing works - no INI generated
+
+#### File System Synchronization
+
+Note the `sleep 1` commands between scripts - these ensure:
+- File writes complete before next script reads
+- Database commits are finished
+- No race conditions on slower storage
+
+On fast SSDs these may be unnecessary, but they're harmless and provide safety on slower systems.
 
 ### Cron Setup
 
