@@ -60,6 +60,9 @@ The system uses a sophisticated approach to fee management:
 
 ## Installation
 
+**⚠️ Installation Directory Requirement:**
+All scripts are configured to run from `~/autofee` (relative to your user's home directory). If you need to install in a different location, you must manually edit the hardcoded paths in every Python script and shell script - this requires advanced knowledge of the codebase. For most users, installing to `~/autofee` is strongly recommended.
+
 ### Prerequisites
 
 - **LND Node**: v0.18.0 or higher (required for inbound fees capability)
