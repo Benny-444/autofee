@@ -212,22 +212,23 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm):
                 (scid, cutoff_time)
             )
             records = cursor.fetchall()
-            
+
             if not records:
-                persisted = load_persisted_avg_fee(scid)
-                if persisted > 0:
-                    return persisted
-                # Check if channel exists in persisted data (even with 0 value)
+                # No routing history - check if this is an existing tracked channel
                 try:
                     if os.path.exists(AVG_FEE_FILE):
                         with open(AVG_FEE_FILE, 'r') as f:
                             data = json.load(f)
                             if str(scid) in data:
-                                return data[str(scid)]  # Return existing value, even if 0
-                except:
-                    pass
-                return current_fee_ppm  # Only for truly NEW channels
-            
+                                # Existing channel - preserve its avg_fee
+                                return max(MIN_AVG_FEE, data[str(scid)])
+                except Exception as e:
+                    logging.error(f"Error reading avg_fees.json: {str(e)}")
+
+                # New channel not yet in avg_fees.json - initialize with current fee
+                logging.info(f"Initializing new channel {scid} with current_fee={current_fee_ppm}")
+                return max(MIN_AVG_FEE, current_fee_ppm)
+
             # Rest of the function continues here for when records exist...
             ema = load_persisted_avg_fee(scid)
             for i, record in enumerate(records):
@@ -367,27 +368,27 @@ def generate_ini():
             # Skip Inactive Channels
             if not chan.get('active', False):
                 continue
-            
+
             # Check if channel is stagnant
             stagnant_info = stagnant_state.get(str(short_chan_id), {})
             is_stagnant = stagnant_info.get('is_stagnant', False)
-            
+
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = updated_avg_fees.get(str(chan['scid']), load_persisted_avg_fee(chan['scid']))
-            
+
             # Compute short_channel_id in x format from scid
             scid_int = int(chan['scid'])
             block_height = scid_int >> 40
             tx_index = (scid_int >> 16) & 0xFFFFFF
             output_index = scid_int & 0xFFFF
             short_channel_id_x = f"{block_height}x{tx_index}x{output_index}"
-            
+
             if is_stagnant:
                 # Skip stagnant channels - let stagnant wrapper handle them
                 logging.info(f"Channel {chan_id}: Skipping stagnant channel (will be handled by stagnant wrapper) - current_fee={current_fee}, avg_fee={avg_fee}")
                 skipped_stagnant += 1
-                
+
                 # Create basic entry with current fee (no adjustment)
                 ini_content += f"[autofee-{short_channel_id_x}]\n"
                 ini_content += f"chan.id = {chan['scid']}\n"
@@ -395,7 +396,7 @@ def generate_ini():
                 ini_content += f"fee_ppm = {int(current_fee)}\n\n"
                 processed_channels += 1
                 continue
-            
+
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = updated_avg_fees.get(str(chan['scid']), load_persisted_avg_fee(chan['scid']))
