@@ -100,12 +100,22 @@ def load_persisted_avg_fee(scid):
         logging.error(f"Error loading persisted avg_fee for {scid}: {str(e)}")
     return 0  # Default to 0 if no persisted, allowing init from current
 
-def save_avg_fee(fee_data):
-    """Save avg_fee for all channels to JSON with atomic write"""
+def save_avg_fee(fee_updates):
+    """Update avg_fees in JSON file (merge, don't replace)"""
     try:
+        # Load existing data
+        existing_data = {}
+        if os.path.exists(AVG_FEE_FILE):
+            with open(AVG_FEE_FILE, 'r') as f:
+                existing_data = json.load(f)
+
+        # Merge updates into existing data
+        existing_data.update(fee_updates)
+
+        # Write back atomically
         temp_file = AVG_FEE_FILE + '.tmp'
         with open(temp_file, 'w') as f:
-            json.dump(fee_data, f)
+            json.dump(existing_data, f)
         os.replace(temp_file, AVG_FEE_FILE)
     except Exception as e:
         logging.error(f"Error saving avg_fees: {str(e)}")
