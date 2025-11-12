@@ -55,6 +55,15 @@ sleep 1
 ## # Short pause for file system sync
 ## sleep 1
 
+# Run minimum fee script for specific channels (if configured)
+if ! /home/admin/autofee/autofee_minfee_wrapper.py >> /home/admin/autofee/cron.log 2>&1; then
+    echo "WARNING: Minimum fee script failed at $(date)" >> /home/admin/autofee/cron.log
+    # Continue anyway - this only affects specific channels
+fi
+
+# Short pause for file system sync
+sleep 1
+
 ## # Run group script for specific channels with synchronized fee policies (if configured)
 ## if ! /home/admin/autofee/autofee_group_wrapper.py >> /home/admin/autofee/cron.log 2>&1; then
 ##     echo "WARNING: Group script failed at $(date)" >> /home/admin/autofee/cron.log
