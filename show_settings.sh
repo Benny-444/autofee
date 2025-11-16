@@ -6,20 +6,25 @@ Show all configuration settings/constants from autofee Python scripts
 import os
 import re
 import sys
+import glob
 
 # Directory containing the autofee scripts
 AUTOFEE_DIR = os.path.expanduser('~/autofee')
 
-# Python files to analyze
+# Base Python files to analyze
 PYTHON_FILES = [
     'autofee_wrapper.py',
     'autofee_neginb_wrapper.py',
     'autofee_stagnant_wrapper.py',
-    'autofee_maxhtlc_wrapper.py',
-    'autofee_pivot_wrapper.py',
-#    'autofee_report.py',
-    'autofee_log_trimmer.py'
 ]
+
+# Add all pivot files dynamically
+pivot_files = glob.glob(os.path.join(AUTOFEE_DIR, '*pivot*.py'))
+# Extract just the filenames (not full paths)
+pivot_files = [os.path.basename(f) for f in pivot_files]
+
+# Combine base files with pivot files (reassigning PYTHON_FILES)
+PYTHON_FILES = PYTHON_FILES + pivot_files
 
 def extract_constants(file_path):
     """Extract constants/settings from a Python file"""
@@ -132,4 +137,5 @@ def main():
     print("=" * 80)
 
 if __name__ == "__main__":
+
     main()
