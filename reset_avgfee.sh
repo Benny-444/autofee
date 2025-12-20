@@ -28,6 +28,7 @@ fi
 # File paths
 AVG_FEE_FILE="$HOME/autofee/avg_fees.json"
 FEE_DB_FILE="$HOME/autofee/fee_history.db"
+RESET_TIMESTAMP_FILE="$HOME/autofee/reset_timestamps.json"
 
 # Check if files exist
 if [ ! -f "$AVG_FEE_FILE" ]; then
@@ -69,9 +70,10 @@ echo
 echo "⚠️  WARNING: This will:"
 echo "   • Delete ALL routing history for this channel"
 echo "   • Reset the average fee to $NEW_FEE ppm"
+echo "   • Record reset timestamp (new forwards will rebuild EMA)"
 echo "   • This action CANNOT be undone"
 echo
-echo "The channel will start fresh with no EMA history."
+echo "The channel will rebuild its EMA from new routing activity only."
 echo "==============================================="
 echo
 
@@ -107,6 +109,30 @@ else
     exit 1
 fi
 
+# Record reset timestamp
+CURRENT_TIMESTAMP=$(date +%s)
+
+# Create backup of reset_timestamps.json if it exists
+if [ -f "$RESET_TIMESTAMP_FILE" ]; then
+    BACKUP_RESET="$RESET_TIMESTAMP_FILE.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$RESET_TIMESTAMP_FILE" "$BACKUP_RESET"
+fi
+
+# Update reset timestamp for this channel
+if [ -f "$RESET_TIMESTAMP_FILE" ]; then
+    cat "$RESET_TIMESTAMP_FILE" | jq --arg scid "$SCID" --arg ts "$CURRENT_TIMESTAMP" '.[$scid] = ($ts | tonumber)' > "$RESET_TIMESTAMP_FILE.tmp"
+else
+    echo "{\"$SCID\": $CURRENT_TIMESTAMP}" > "$RESET_TIMESTAMP_FILE.tmp"
+fi
+
+if [ $? -eq 0 ]; then
+    mv "$RESET_TIMESTAMP_FILE.tmp" "$RESET_TIMESTAMP_FILE"
+    echo "✓ Recorded reset timestamp: $(date -d @$CURRENT_TIMESTAMP)"
+else
+    echo "✗ Warning: Could not save reset timestamp (autofee may recalculate from old history)"
+    rm -f "$RESET_TIMESTAMP_FILE.tmp"
+fi
+
 echo
 echo "==============================================="
 echo "RESET COMPLETE"
@@ -114,7 +140,9 @@ echo "==============================================="
 echo "Channel $SCID ($ALIAS) has been reset:"
 echo "• Average fee: $NEW_FEE ppm"
 echo "• Routing history: Cleared"
+echo "• Reset timestamp: Recorded"
 echo "• Backup saved: $BACKUP_FILE"
 echo
-echo "The channel will rebuild its EMA from new routing activity."
+echo "The channel will rebuild its EMA from NEW routing activity only."
+echo "Old forwards before $(date -d @$CURRENT_TIMESTAMP) will be ignored."
 echo "==============================================="
