@@ -19,7 +19,8 @@ ADJUSTMENT_FACTOR = 0.05         # Percentage of difference to apply as adjustme
 AVG_FEE_FILE = os.path.expanduser('~/autofee/avg_fees.json')
 CHARGE_INI_FILE = os.path.expanduser('~/autofee/dynamic_charge.ini')
 FEE_DB_FILE = os.path.expanduser('~/autofee/fee_history.db')
-STAGNANT_STATE_FILE = os.path.expanduser('~/autofee/stagnant_state.json')  # Added
+STAGNANT_STATE_FILE = os.path.expanduser('~/autofee/stagnant_state.json')
+RESET_TIMESTAMPS_FILE = os.path.expanduser('~/autofee/reset_timestamps.json')  # NEW
 CHAN_IDS = [] # Leave empty for all channels
 EXCLUDE_CHAN_IDS = []  # Add your channel IDs here
 
@@ -130,6 +131,18 @@ def load_stagnant_state():
         logging.error(f"Error loading stagnant state: {str(e)}")
     return {}
 
+def load_reset_timestamps():
+    """Load reset timestamps for manually reset channels"""
+    try:
+        if os.path.exists(RESET_TIMESTAMPS_FILE):
+            with open(RESET_TIMESTAMPS_FILE, 'r') as f:
+                data = json.load(f)
+                logging.info(f"Loaded reset timestamps for {len(data)} channels")
+                return data
+    except Exception as e:
+        logging.error(f"Error loading reset timestamps: {str(e)}")
+    return {}
+
 def run_lncli(args):
     """Execute lncli command and parse JSON output"""
     try:
@@ -209,10 +222,20 @@ def update_fee_history(local_pubkey, channel_policies):
     except Exception as e:
         logging.error(f"Error updating fee history: {str(e)}")
 
-def calculate_avg_fee_from_history(scid, current_fee_ppm):
+def calculate_avg_fee_from_history(scid, current_fee_ppm, reset_timestamps):
     """Calculate EMA from fee history database or return persisted if no history"""
     try:
-        cutoff_time = int((datetime.now() - timedelta(days=DAYS_BACK)).timestamp())
+        # Check if this channel was manually reset
+        reset_ts = reset_timestamps.get(str(scid))
+        if reset_ts:
+            # Use reset timestamp as cutoff (only use forwards after reset)
+            cutoff_time = int(reset_ts)
+            reset_date = datetime.fromtimestamp(reset_ts).strftime('%Y-%m-%d %H:%M:%S')
+            logging.info(f"Channel {scid} was manually reset at {reset_date}, using only forwards after that time")
+        else:
+            # Normal cutoff (14 days back)
+            cutoff_time = int((datetime.now() - timedelta(days=DAYS_BACK)).timestamp())
+
         with get_db() as conn:
             cursor = conn.execute(
                 '''SELECT timestamp, true_fee_ppm
@@ -224,14 +247,17 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm):
             records = cursor.fetchall()
 
             if not records:
-                # No routing history - check if this is an existing tracked channel
+                # No routing history after reset/cutoff - check if this is an existing tracked channel
                 try:
                     if os.path.exists(AVG_FEE_FILE):
                         with open(AVG_FEE_FILE, 'r') as f:
                             data = json.load(f)
                             if str(scid) in data:
                                 # Existing channel - preserve its avg_fee
-                                return max(MIN_AVG_FEE, data[str(scid)])
+                                preserved_fee = max(MIN_AVG_FEE, data[str(scid)])
+                                if reset_ts:
+                                    logging.info(f"Channel {scid}: No forwards after reset, preserving manual avg_fee={preserved_fee}")
+                                return preserved_fee
                 except Exception as e:
                     logging.error(f"Error reading avg_fees.json: {str(e)}")
 
@@ -251,6 +277,8 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm):
                     ema = ALPHA * true_fee_ppm + (1 - ALPHA) * ema
 
             ema = max(MIN_AVG_FEE, round(ema))  # Min only after calculation
+            if reset_ts:
+                logging.info(f"Channel {scid}: Recalculated EMA from {len(records)} forwards after reset, new avg_fee={ema}")
             return ema
 
     except Exception as e:
@@ -311,6 +339,9 @@ def generate_ini():
         # Load stagnant state
         stagnant_state = load_stagnant_state()
 
+        # Load reset timestamps
+        reset_timestamps = load_reset_timestamps()
+
         # First pass: collect current_fee_ppm and build policy cache
         for chan in channels:
             chan_id = chan.get('chan_id')
@@ -358,7 +389,7 @@ def generate_ini():
                 continue
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
-            avg_fee = calculate_avg_fee_from_history(chan['scid'], current_fee)
+            avg_fee = calculate_avg_fee_from_history(chan['scid'], current_fee, reset_timestamps)
             updated_avg_fees[str(chan['scid'])] = avg_fee
 
         # Save all updated avg_fees at once
