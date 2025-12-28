@@ -286,7 +286,8 @@ def calculate_avg_fee_from_history(scid, current_fee_ppm, reset_timestamps):
         return load_persisted_avg_fee(scid)
 
 def get_channel_info(short_chan_id, local_pubkey):
-    """Get channel info and extract local policy with correct field names"""
+    """Get channel info and extract local policy with correct field names.
+    Returns None if channel info cannot be retrieved (e.g., gossip not propagated)."""
     try:
         if not short_chan_id:
             raise ValueError("No short channel ID provided")
@@ -302,11 +303,7 @@ def get_channel_info(short_chan_id, local_pubkey):
             policy = chan_info.get('node2_policy', {})
         else:
             logging.warning(f"No matching policy found for channel {short_chan_id}")
-            return {
-                'local_base_fee': 0,
-                'local_fee_rate': 0,
-                'current_fee_ppm': MIN_AVG_FEE
-            }
+            return None  # CHANGED: was returning defaults
 
         return {
             'local_base_fee': int(policy.get('fee_base_msat', 0)),
@@ -315,11 +312,7 @@ def get_channel_info(short_chan_id, local_pubkey):
         }
     except Exception as e:
         logging.error(f"Error getting channel info for {short_chan_id}: {str(e)}")
-        return {
-            'local_base_fee': 0,
-            'local_fee_rate': 0,
-            'current_fee_ppm': MIN_AVG_FEE
-        }
+        return None  # CHANGED: was returning defaults
 
 def generate_ini():
     """Generate dynamic_charge.ini with fees for all channels"""
@@ -335,6 +328,7 @@ def generate_ini():
         ini_content = ""
         fee_data = {}
         channel_policies = {}  # Cache for forwarding history processing
+        skipped_channels = set()  # Track channels to skip (gossip not propagated)
 
         # Load stagnant state
         stagnant_state = load_stagnant_state()
@@ -358,6 +352,13 @@ def generate_ini():
                 continue
             logging.info(f"Processing channel {chan_id} (scid: {short_chan_id})")
             channel_info = get_channel_info(short_chan_id, local_pubkey)
+            
+            # Skip channels where getchaninfo failed (gossip not yet propagated)
+            if channel_info is None:
+                logging.warning(f"Skipping channel {chan_id} (scid: {short_chan_id}) - gossip not yet propagated")
+                skipped_channels.add(str(short_chan_id))
+                continue
+            
             current_fee = channel_info['current_fee_ppm']
             fee_data[str(chan['scid'])] = current_fee if current_fee > 0 else 0
             # Cache policy for forwarding history processing
@@ -387,6 +388,9 @@ def generate_ini():
             # ADD THIS CHECK HERE TOO:
             if not chan.get('active', False):
                 continue
+            # Skip channels where gossip not propagated (identified in first pass)
+            if str(short_chan_id) in skipped_channels:
+                continue
             channel_info = get_channel_info(short_chan_id, local_pubkey)
             current_fee = channel_info['current_fee_ppm']
             avg_fee = calculate_avg_fee_from_history(chan['scid'], current_fee, reset_timestamps)
@@ -408,6 +412,10 @@ def generate_ini():
 
             # Skip Inactive Channels
             if not chan.get('active', False):
+                continue
+
+            # Skip channels where gossip not propagated (identified in first pass)
+            if str(short_chan_id) in skipped_channels:
                 continue
 
             # Check if channel is stagnant
@@ -474,8 +482,8 @@ def generate_ini():
         with open(CHARGE_INI_FILE, 'w') as f:
             f.write(ini_content)
 
-        logging.info(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant channels)")
-        print(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant channels)")
+        logging.info(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant, {len(skipped_channels)} gossip-pending)")
+        print(f"Generated INI for {processed_channels} channels (skipped {skipped_stagnant} stagnant, {len(skipped_channels)} gossip-pending)")
 
     except Exception as e:
         logging.error(f"Error generating ini: {str(e)}")
