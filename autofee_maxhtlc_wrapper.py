@@ -131,7 +131,7 @@ def update_max_htlc():
             else:
                 reserve_amount = int(capacity * RESERVE_OFFSET)
                 usable_balance = max(0, local_balance - reserve_amount)
-                new_max_htlc_msat = int(usable_balance * MAX_HTLC_RATIO * 1000)  # Convert sats to msats
+                new_max_htlc_msat = max(1000, int(usable_balance * MAX_HTLC_RATIO * 1000))  # Convert sats to msats
 
             # Get current max_htlc_msat
             current_max_htlc_msat = get_current_max_htlc(short_chan_id, local_pubkey)
