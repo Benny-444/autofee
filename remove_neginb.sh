@@ -26,7 +26,12 @@
 #   ./remove_neginb.sh 996507179527241729 901883557103861761
 # -----------------------------------------------------------------------------
 
-python3 - "$@" <<'PYEOF'
+# Embed the Python in a temp file and run that (rather than piping it in via
+# stdin) so the script's stdin stays attached to the terminal and the
+# confirmation prompt works on any shell.
+PYSRC="$(mktemp)" || { echo "ERROR: could not create temp file" >&2; exit 1; }
+trap 'rm -f "$PYSRC"' EXIT
+cat > "$PYSRC" <<'PYEOF'
 import sys, os, re, ast, json, shutil, shlex, subprocess, configparser
 from datetime import datetime
 
@@ -147,17 +152,12 @@ def lookup_channels(scids):
         pass
     return info
 
-def confirm_tty(prompt):
+def confirm(prompt):
     try:
-        tty = open('/dev/tty', 'r+')
-    except OSError:
-        print("ERROR: no terminal available for confirmation; aborting (nothing changed).")
-        sys.exit(1)
-    try:
-        tty.write(prompt); tty.flush()
-        return tty.readline().strip()
-    finally:
-        tty.close()
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled - no changes made.")
+        sys.exit(0)
 
 def fmt_list(items):
     if not items:
@@ -336,7 +336,7 @@ def main():
     # ------------------------------------------------------------------
     # Confirm
     # ------------------------------------------------------------------
-    ans = confirm_tty("Proceed? (type 'yes' to confirm): ")
+    ans = confirm("Proceed? (type 'yes' to confirm): ")
     if ans != 'yes':
         print("Cancelled - no changes made.")
         sys.exit(0)
@@ -413,3 +413,5 @@ def main():
 if __name__ == "__main__":
     main()
 PYEOF
+
+python3 "$PYSRC" "$@"
